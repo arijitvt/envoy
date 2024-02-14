@@ -1,4 +1,6 @@
 #include "source/exe/main_common.h"
+#include <ostream>
+#include <iostream>
 
 #ifdef WIN32
 #include "source/exe/service_base.h"
@@ -21,5 +23,6 @@ int main(int argc, char** argv) {
   }
   return EXIT_SUCCESS;
 #endif
+  std::cout << "this is the starting of the prog"  << std::endl;
   return Envoy::MainCommon::main(argc, argv);
 }
