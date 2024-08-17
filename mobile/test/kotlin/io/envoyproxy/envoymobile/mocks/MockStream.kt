@@ -18,93 +18,15 @@ class MockStream(underlyingStream: MockEnvoyHTTPStream) :
   Stream(underlyingStream, useByteBufferPosition = false) {
   private val mockStream: MockEnvoyHTTPStream = underlyingStream
 
-  private val mockStreamIntel =
-    object : EnvoyStreamIntel {
-      override fun getStreamId(): Long {
-        return 0
-      }
-
-      override fun getConnectionId(): Long {
-        return 0
-      }
-
-      override fun getAttemptCount(): Long {
-        return 0
-      }
-
-      override fun getConsumedBytesFromResponse(): Long {
-        return 0
-      }
-    }
+  private val mockStreamIntel = EnvoyStreamIntel(0, 0, 0, 0)
 
   private val mockFinalStreamIntel =
-    object : EnvoyFinalStreamIntel {
-      override fun getStreamStartMs(): Long {
-        return 0
-      }
+    EnvoyFinalStreamIntel(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0)
 
-      override fun getDnsStartMs(): Long {
-        return 0
-      }
-
-      override fun getDnsEndMs(): Long {
-        return 0
-      }
-
-      override fun getConnectStartMs(): Long {
-        return 0
-      }
-
-      override fun getConnectEndMs(): Long {
-        return 0
-      }
-
-      override fun getSslStartMs(): Long {
-        return 0
-      }
-
-      override fun getSslEndMs(): Long {
-        return 0
-      }
-
-      override fun getSendingStartMs(): Long {
-        return 0
-      }
-
-      override fun getSendingEndMs(): Long {
-        return 0
-      }
-
-      override fun getResponseStartMs(): Long {
-        return 0
-      }
-
-      override fun getStreamEndMs(): Long {
-        return 0
-      }
-
-      override fun getSocketReused(): Boolean {
-        return false
-      }
-
-      override fun getSentByteCount(): Long {
-        return 0
-      }
-
-      override fun getReceivedByteCount(): Long {
-        return 0
-      }
-
-      override fun getResponseFlags(): Long {
-        return 0
-      }
-
-      override fun getUpstreamProtocol(): Long {
-        return 0
-      }
-    }
   /** Closure that will be called when request headers are sent. */
-  var onRequestHeaders: ((headers: RequestHeaders, endStream: Boolean) -> Unit)? = null
+  var onRequestHeaders:
+    ((headers: RequestHeaders, endStream: Boolean, idempotent: Boolean) -> Unit)? =
+    null
   /** Closure that will be called when request data is sent. */
   var onRequestData: ((data: ByteBuffer, endStream: Boolean) -> Unit)? = null
   /** Closure that will be called when request trailers are sent. */
@@ -112,8 +34,12 @@ class MockStream(underlyingStream: MockEnvoyHTTPStream) :
   /** Closure that will be called when the stream is canceled by the client. */
   var onCancel: (() -> Unit)? = null
 
-  override fun sendHeaders(headers: RequestHeaders, endStream: Boolean): Stream {
-    onRequestHeaders?.invoke(headers, endStream)
+  override fun sendHeaders(
+    headers: RequestHeaders,
+    endStream: Boolean,
+    idempotent: Boolean
+  ): Stream {
+    onRequestHeaders?.invoke(headers, endStream, idempotent)
     return this
   }
 

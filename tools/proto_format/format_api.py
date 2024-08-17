@@ -32,6 +32,7 @@ CONTRIB_V3_ALLOW_LIST = [
     'envoy.extensions.filters.network.client_ssl_auth.v3',
     'envoy.extensions.filters.network.generic_proxy.action.v3',
     'envoy.extensions.filters.network.generic_proxy.codecs.dubbo.v3',
+    'envoy.extensions.filters.network.generic_proxy.codecs.http1.v3',
     'envoy.extensions.filters.network.generic_proxy.codecs.kafka.v3',
     'envoy.extensions.filters.network.generic_proxy.matcher.v3',
     'envoy.extensions.filters.network.generic_proxy.router.v3',
@@ -75,9 +76,9 @@ $frozen_pkgs    ],
 )
 """)
 
-IMPORT_REGEX = re.compile('import "(.*)";')
-SERVICE_REGEX = re.compile('service \w+ {')
-PACKAGE_REGEX = re.compile('\npackage ([a-z0-9_\.]*);')
+IMPORT_REGEX = re.compile(r'import "(.*)";')
+SERVICE_REGEX = re.compile(r'service \w+ {')
+PACKAGE_REGEX = re.compile(r'\npackage ([a-z0-9_\.]*);')
 PREVIOUS_MESSAGE_TYPE_REGEX = re.compile(r'previous_message_type\s+=\s+"([^"]*)";')
 
 

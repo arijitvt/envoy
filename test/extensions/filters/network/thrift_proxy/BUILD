@@ -227,6 +227,7 @@ envoy_extension_cc_test(
     deps = [
         ":mocks",
         ":utility_lib",
+        "//source/common/formatter:formatter_extension_lib",
         "//source/extensions/access_loggers/file:config",
         "//source/extensions/filters/network/thrift_proxy:config",
         "//source/extensions/filters/network/thrift_proxy:conn_manager_lib",
@@ -318,6 +319,7 @@ envoy_extension_cc_test(
         "//source/extensions/filters/network/thrift_proxy/router:config",
         "//source/extensions/filters/network/thrift_proxy/router:router_interface",
         "//source/extensions/filters/network/thrift_proxy/router:router_lib",
+        "//test/mocks/server:server_factory_context_mocks",
         "//test/test_common:utility_lib",
         "@envoy_api//envoy/config/filter/thrift/router/v2alpha1:pkg_cc_proto",
         "@envoy_api//envoy/extensions/filters/network/thrift_proxy/v3:pkg_cc_proto",

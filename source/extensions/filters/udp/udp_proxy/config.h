@@ -15,18 +15,9 @@ using TunnelingConfig =
     envoy::extensions::filters::udp::udp_proxy::v3::UdpProxyConfig::UdpTunnelingConfig;
 
 /**
- * Base class for both tunnel response headers and trailers.
- */
-class TunnelResponseHeadersOrTrailers : public StreamInfo::FilterState::Object {
-public:
-  ProtobufTypes::MessagePtr serializeAsProto() const override;
-  virtual const Http::HeaderMap& value() const PURE;
-};
-
-/**
  * Response headers for the tunneling connections.
  */
-class TunnelResponseHeaders : public TunnelResponseHeadersOrTrailers {
+class TunnelResponseHeaders : public Http::TunnelResponseHeadersOrTrailersImpl {
 public:
   TunnelResponseHeaders(Http::ResponseHeaderMapPtr&& response_headers)
       : response_headers_(std::move(response_headers)) {}
@@ -40,7 +31,7 @@ private:
 /**
  * Response trailers for the tunneling connections.
  */
-class TunnelResponseTrailers : public TunnelResponseHeadersOrTrailers {
+class TunnelResponseTrailers : public Http::TunnelResponseHeadersOrTrailersImpl {
 public:
   TunnelResponseTrailers(Http::ResponseTrailerMapPtr&& response_trailers)
       : response_trailers_(std::move(response_trailers)) {}
@@ -116,7 +107,7 @@ private:
 };
 
 class UdpProxyFilterConfigImpl : public UdpProxyFilterConfig,
-                                 public FilterChainFactory,
+                                 public UdpSessionFilterChainFactory,
                                  Logger::Loggable<Logger::Id::config> {
 public:
   UdpProxyFilterConfigImpl(
@@ -147,7 +138,7 @@ public:
   const std::vector<AccessLog::InstanceSharedPtr>& proxyAccessLogs() const override {
     return proxy_access_logs_;
   }
-  const FilterChainFactory& sessionFilterFactory() const override { return *this; };
+  const UdpSessionFilterChainFactory& sessionFilterFactory() const override { return *this; };
   bool hasSessionFilters() const override { return !filter_factories_.empty(); }
   const UdpTunnelingConfigPtr& tunnelingConfig() const override { return tunneling_config_; };
   bool flushAccessLogOnTunnelConnected() const override {
@@ -158,9 +149,9 @@ public:
   }
   Random::RandomGenerator& randomGenerator() const override { return random_generator_; }
 
-  // FilterChainFactory
-  void createFilterChain(FilterChainFactoryCallbacks& callbacks) const override {
-    for (const FilterFactoryCb& factory : filter_factories_) {
+  // UdpSessionFilterChainFactory
+  void createFilterChain(Network::UdpSessionFilterChainFactoryCallbacks& callbacks) const override {
+    for (const Network::UdpSessionFilterFactoryCb& factory : filter_factories_) {
       factory(callbacks);
     }
   };
@@ -187,7 +178,7 @@ private:
   std::vector<AccessLog::InstanceSharedPtr> session_access_logs_;
   std::vector<AccessLog::InstanceSharedPtr> proxy_access_logs_;
   UdpTunnelingConfigPtr tunneling_config_;
-  std::list<SessionFilters::FilterFactoryCb> filter_factories_;
+  std::list<Network::UdpSessionFilterFactoryCb> filter_factories_;
   Random::RandomGenerator& random_generator_;
 };
 

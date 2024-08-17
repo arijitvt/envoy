@@ -2,6 +2,7 @@
 
 #include "test/mocks/api/mocks.h"
 #include "test/test_common/threadsafe_singleton_injector.h"
+#include "test/test_common/utility.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -191,6 +192,8 @@ TEST(EnvoyQuicUtilsTest, ConvertQuicConfig) {
   EXPECT_EQ(25165824, quic_config.GetInitialSessionFlowControlWindowToSend());
   EXPECT_TRUE(quic_config.SendConnectionOptions().empty());
   EXPECT_TRUE(quic_config.ClientRequestedIndependentOptions(quic::Perspective::IS_CLIENT).empty());
+  EXPECT_EQ(quic::QuicTime::Delta::FromSeconds(quic::kMaximumIdleTimeoutSecs),
+            quic_config.IdleNetworkTimeout());
 
   // Test converting values.
   config.mutable_max_concurrent_streams()->set_value(2);
@@ -198,10 +201,12 @@ TEST(EnvoyQuicUtilsTest, ConvertQuicConfig) {
   config.mutable_initial_connection_window_size()->set_value(50);
   config.set_connection_options("5RTO,ACKD");
   config.set_client_connection_options("6RTO,AKD4");
+  config.mutable_idle_network_timeout()->set_seconds(30);
   convertQuicConfig(config, quic_config);
   EXPECT_EQ(2, quic_config.GetMaxBidirectionalStreamsToSend());
   EXPECT_EQ(2, quic_config.GetMaxUnidirectionalStreamsToSend());
   EXPECT_EQ(3, quic_config.GetInitialMaxStreamDataBytesIncomingBidirectionalToSend());
+  EXPECT_EQ(quic::QuicTime::Delta::FromSeconds(30), quic_config.IdleNetworkTimeout());
   EXPECT_EQ(2, quic_config.SendConnectionOptions().size());
   EXPECT_EQ(2, quic_config.ClientRequestedIndependentOptions(quic::Perspective::IS_CLIENT).size());
   std::string quic_copts = "";
@@ -258,6 +263,23 @@ TEST(EnvoyQuicUtilsTest, HeaderMapMaxSizeLimit) {
       headers_block, 60, 100, validator, details, rst);
   EXPECT_EQ(response_trailer->maxHeadersCount(), 100);
   EXPECT_EQ(response_trailer->maxHeadersKb(), 60);
+}
+
+TEST(EnvoyQuicUtilsTest, EnvoyResetReasonToQuicResetErrorCodeImpossibleCases) {
+  EXPECT_ENVOY_BUG(envoyResetReasonToQuicRstError(Http::StreamResetReason::Overflow),
+                   "Resource overflow ");
+  EXPECT_ENVOY_BUG(
+      envoyResetReasonToQuicRstError(Http::StreamResetReason::RemoteRefusedStreamReset),
+      "Remote reset ");
+}
+
+TEST(EnvoyQuicUtilsTest, QuicResetErrorToEnvoyResetReason) {
+  EXPECT_EQ(quicRstErrorToEnvoyLocalResetReason(quic::QUIC_STREAM_NO_ERROR),
+            Http::StreamResetReason::LocalReset);
+  EXPECT_EQ(quicRstErrorToEnvoyRemoteResetReason(quic::QUIC_STREAM_CONNECTION_ERROR),
+            Http::StreamResetReason::ConnectionTermination);
+  EXPECT_EQ(quicRstErrorToEnvoyRemoteResetReason(quic::QUIC_STREAM_CONNECT_ERROR),
+            Http::StreamResetReason::ConnectError);
 }
 
 } // namespace Quic

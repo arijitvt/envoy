@@ -15,7 +15,6 @@
 #include "test/mocks/http/mocks.h"
 #include "test/mocks/http/stream_decoder.h"
 #include "test/mocks/network/mocks.h"
-#include "test/test_common/test_runtime.h"
 #include "test/test_common/test_time.h"
 #include "test/test_common/utility.h"
 
@@ -51,8 +50,10 @@ public:
         quic_connection_(connection_helper_, alarm_factory_, writer_,
                          quic::ParsedQuicVersionVector{quic_version_}, *listener_config_.socket_,
                          connection_id_generator_),
+        quic_stat_names_(listener_config_.listenerScope().symbolTable()),
         quic_session_(quic_config_, {quic_version_}, &quic_connection_, *dispatcher_,
-                      quic_config_.GetInitialStreamFlowControlWindowToSend() * 2),
+                      quic_config_.GetInitialStreamFlowControlWindowToSend() * 2, quic_stat_names_,
+                      listener_config_.listenerScope()),
         stats_(
             {ALL_HTTP3_CODEC_STATS(POOL_COUNTER_PREFIX(listener_config_.listenerScope(), "http3."),
                                    POOL_GAUGE_PREFIX(listener_config_.listenerScope(), "http3."))}),
@@ -223,6 +224,7 @@ protected:
   quic::DeterministicConnectionIdGenerator connection_id_generator_{
       quic::kQuicDefaultConnectionIdLength};
   testing::NiceMock<MockEnvoyQuicServerConnection> quic_connection_;
+  Envoy::Quic::QuicStatNames quic_stat_names_;
   MockEnvoyQuicSession quic_session_;
   quic::QuicStreamId stream_id_{kStreamId};
   Http::Http3::CodecStats stats_;
@@ -287,10 +289,6 @@ TEST_F(EnvoyQuicServerStreamTest, PostRequestAndResponse) {
 }
 
 TEST_F(EnvoyQuicServerStreamTest, PostRequestAndResponseWithMemSliceReleasor) {
-  TestScopedRuntime scoped_runtime;
-  scoped_runtime.mergeValues(
-      {{"envoy.reloadable_features.quiche_use_mem_slice_releasor_api", "true"}});
-
   EXPECT_EQ(absl::nullopt, quic_stream_->http1StreamEncoderOptions());
   receiveRequest(request_body_, true, request_body_.size() * 2);
   quic_stream_->encodeHeaders(response_headers_, /*end_stream=*/false);
@@ -849,7 +847,8 @@ TEST_F(EnvoyQuicServerStreamTest, StatsGathererLogsOnStreamDestruction) {
   std::list<AccessLog::InstanceSharedPtr> loggers = {mock_logger};
   Event::GlobalTimeSystem test_time_;
   Envoy::StreamInfo::StreamInfoImpl stream_info{Http::Protocol::Http2, test_time_.timeSystem(),
-                                                nullptr};
+                                                nullptr,
+                                                StreamInfo::FilterState::LifeSpan::FilterChain};
   quic_stream_->statsGatherer()->setAccessLogHandlers(loggers);
   quic_stream_->setDeferredLoggingHeadersAndTrailers(nullptr, nullptr, nullptr, stream_info);
 

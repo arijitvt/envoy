@@ -61,15 +61,9 @@ jobs:
             --config=mobile-remote-release-clang
             //test/performance:test_binary_size
           # Ensure files don't leak back into the main binary
-          source: >-
-            rm
-            source/common/listener_manager/listener_manager_impl.h
-            source/server/overload_manager_impl.cc
-            source/common/network/listen_socket_impl.h
-            source/common/network/tcp_listener_impl.h
-            source/server/guarddog_impl.h
-            source/server/watchdog_impl.h
-            source/server/options_impl.cc
+          source: |-
+            TOREMOVE=$(cat mobile/test/performance/files_em_does_not_use | grep -vE '^#')
+            rm $TOREMOVE
           target: size-current
         - name: Main size
           args: >-
@@ -100,8 +94,9 @@ jobs:
       request: ${{ needs.load.outputs.request }}
       runs-on: ubuntu-22.04
       source: |
-        strip -s -o dist/main.stripped dist/sizemain/size-main
-        strip -s -o dist/current.stripped dist/sizecurrent/size-current
+        mkdir dist
+        strip -s -o dist/main.stripped /home/runner/work/_temp/dist/sizemain/size-main
+        strip -s -o dist/current.stripped /home/runner/work/_temp/dist/sizecurrent/size-current
         zip -9 dist/main.zip dist/main.stripped
         zip -9 dist/current.zip dist/current.stripped
       target: size-compare

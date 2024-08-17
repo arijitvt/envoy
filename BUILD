@@ -32,6 +32,7 @@ exports_files([
     "CODEOWNERS",
     "OWNERS.md",
     ".github/config.yml",
+    "reviewers.yaml",
 ])
 
 alias(
@@ -81,13 +82,6 @@ package_group(
     name = "contrib_library",
     packages = [
         "//contrib/...",
-    ],
-)
-
-package_group(
-    name = "examples_library",
-    packages = [
-        "//examples/...",
     ],
 )
 

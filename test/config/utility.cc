@@ -7,6 +7,7 @@
 #include "envoy/config/listener/v3/listener_components.pb.h"
 #include "envoy/config/route/v3/route_components.pb.h"
 #include "envoy/extensions/access_loggers/file/v3/file.pb.h"
+#include "envoy/extensions/filters/http/upstream_codec/v3/upstream_codec.pb.h"
 #include "envoy/extensions/filters/network/http_connection_manager/v3/http_connection_manager.pb.h"
 #include "envoy/extensions/transport_sockets/quic/v3/quic_transport.pb.h"
 #include "envoy/extensions/transport_sockets/tls/v3/cert.pb.h"
@@ -58,7 +59,6 @@ admin:
       port_value: 0
 dynamic_resources:
   lds_config:
-    resource_api_version: V3
     path_config_source:
       path: {}
 static_resources:
@@ -376,10 +376,8 @@ admin:
       port_value: 0
 dynamic_resources:
   cds_config:
-    resource_api_version: V3
     api_config_source:
       api_type: {}
-      transport_api_version: V3
       grpc_services:
         envoy_grpc:
           cluster_name: my_cds_cluster
@@ -451,13 +449,10 @@ std::string ConfigHelper::adsBootstrap(const std::string& api_type) {
   return fmt::format(R"EOF(
 dynamic_resources:
   lds_config:
-    resource_api_version: V3
     ads: {{}}
   cds_config:
-    resource_api_version: V3
     ads: {{}}
   ads_config:
-    transport_api_version: V3
     api_type: {0}
     set_node_on_first_message_only: true
 static_resources:
@@ -664,7 +659,6 @@ envoy::config::listener::v3::Listener ConfigHelper::buildListener(const std::str
             rds:
               route_config_name: {}
               config_source:
-                resource_api_version: V3
                 ads: {{}}
             http_filters:
             - name: envoy.filters.http.router
@@ -832,9 +826,10 @@ void ConfigHelper::setConnectConfig(
     match->mutable_connect_matcher();
   }
 
+  auto* upgrade = route->mutable_route()->add_upgrade_configs();
+  upgrade->set_upgrade_type("CONNECT");
+
   if (terminate_connect) {
-    auto* upgrade = route->mutable_route()->add_upgrade_configs();
-    upgrade->set_upgrade_type("CONNECT");
     auto* config = upgrade->mutable_connect_config();
     if (allow_post) {
       config->set_allow_post(true);
@@ -862,9 +857,11 @@ void ConfigHelper::setConnectUdpConfig(
   match->Clear();
   match->mutable_connect_matcher();
 
+  auto* upgrade = route->mutable_route()->add_upgrade_configs();
+  upgrade->set_upgrade_type("connect-udp");
+
   if (terminate_connect) {
-    auto* upgrade = route->mutable_route()->add_upgrade_configs();
-    upgrade->set_upgrade_type("connect-udp");
+    upgrade->mutable_connect_config();
   }
 
   hcm.add_upgrade_configs()->set_upgrade_type("connect-udp");
@@ -1249,7 +1246,10 @@ void ConfigHelper::prependFilter(const std::string& config, bool downstream) {
               ["envoy.extensions.upstreams.http.v3.HttpProtocolOptions"]);
     }
     if (old_protocol_options.http_filters().empty()) {
-      old_protocol_options.add_http_filters()->set_name("envoy.filters.http.upstream_codec");
+      auto* codec_filter = old_protocol_options.add_http_filters();
+      codec_filter->set_name("envoy.filters.http.upstream_codec");
+      codec_filter->mutable_typed_config()->PackFrom(
+          envoy::extensions::filters::http::upstream_codec::v3::UpstreamCodec::default_instance());
     }
     auto* filter_list_back = old_protocol_options.add_http_filters();
 #ifdef ENVOY_ENABLE_YAML
@@ -1315,6 +1315,7 @@ void ConfigHelper::addSslConfig(const ServerSslOptions& options) {
     tls_context.set_ocsp_staple_policy(
         envoy::extensions::transport_sockets::tls::v3::DownstreamTlsContext::MUST_STAPLE);
   }
+  tls_context.set_prefer_client_ciphers(options.prefer_client_ciphers_);
   filter_chain->mutable_transport_socket()->set_name("envoy.transport_sockets.tls");
   filter_chain->mutable_transport_socket()->mutable_typed_config()->PackFrom(tls_context);
 }
@@ -1506,6 +1507,9 @@ void ConfigHelper::initializeTls(
   for (const auto& curve : options.curves_) {
     common_tls_context.mutable_tls_params()->add_ecdh_curves(curve);
   }
+  for (const auto& cipher : options.ciphers_) {
+    common_tls_context.mutable_tls_params()->add_cipher_suites(cipher);
+  }
   if (options.rsa_cert_) {
     auto* tls_certificate = common_tls_context.add_tls_certificates();
     tls_certificate->mutable_certificate_chain()->set_filename(
@@ -1528,9 +1532,20 @@ void ConfigHelper::initializeTls(
           "test/config/integration/certs/server_ecdsa_ocsp_resp.der"));
     }
   }
+
   if (!options.san_matchers_.empty()) {
     *validation_context->mutable_match_typed_subject_alt_names() = {options.san_matchers_.begin(),
                                                                     options.san_matchers_.end()};
+  }
+  if (!options.tls_cert_selector_yaml_.empty()) {
+    auto* cert_selector = common_tls_context.mutable_custom_tls_certificate_selector();
+#ifdef ENVOY_ENABLE_YAML
+    TestUtility::loadFromYaml(TestEnvironment::substitute(options.tls_cert_selector_yaml_),
+                              *cert_selector);
+#else
+    UNREFERENCED_PARAMETER(cert_selector);
+    PANIC("YAML support compiled out");
+#endif
   }
   initializeTlsKeyLog(common_tls_context, options);
 }
@@ -1748,8 +1763,8 @@ void CdsHelper::setCds(const std::vector<envoy::config::cluster::v3::Cluster>& c
   }
   // Past the initial write, need move semantics to trigger inotify move event that the
   // FilesystemSubscriptionImpl is subscribed to.
-  std::string path =
-      TestEnvironment::writeStringToFileForTest("cds.update.pb_text", cds_response.DebugString());
+  std::string path = TestEnvironment::writeStringToFileForTest(
+      "cds.update.pb_text", MessageUtil::toTextProto(cds_response));
   TestEnvironment::renameFile(path, cds_path_);
 }
 
@@ -1770,8 +1785,8 @@ void EdsHelper::setEds(const std::vector<envoy::config::endpoint::v3::ClusterLoa
   }
   // Past the initial write, need move semantics to trigger inotify move event that the
   // FilesystemSubscriptionImpl is subscribed to.
-  std::string path =
-      TestEnvironment::writeStringToFileForTest("eds.update.pb_text", eds_response.DebugString());
+  std::string path = TestEnvironment::writeStringToFileForTest(
+      "eds.update.pb_text", MessageUtil::toTextProto(eds_response));
   TestEnvironment::renameFile(path, eds_path_);
 }
 

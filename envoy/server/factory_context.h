@@ -13,6 +13,7 @@
 #include "envoy/http/codes.h"
 #include "envoy/http/context.h"
 #include "envoy/http/filter.h"
+#include "envoy/http/http_server_properties_cache.h"
 #include "envoy/init/manager.h"
 #include "envoy/network/drain_decision.h"
 #include "envoy/network/filter.h"
@@ -36,6 +37,11 @@
 #include "source/common/protobuf/protobuf.h"
 
 namespace Envoy {
+
+namespace Regex {
+class Engine;
+}
+
 namespace Server {
 namespace Configuration {
 
@@ -116,6 +122,11 @@ public:
   virtual Upstream::ClusterManager& clusterManager() PURE;
 
   /**
+   * @return const Http::HttpServerPropertiesCacheManager& instance for use by the entire server.
+   */
+  virtual Http::HttpServerPropertiesCacheManager& httpServerPropertiesCacheManager() PURE;
+
+  /**
    * @return TimeSource& a reference to the time source.
    */
   virtual TimeSource& timeSource() PURE;
@@ -129,6 +140,11 @@ public:
    * @return ServerLifecycleNotifier& the lifecycle notifier for the server.
    */
   virtual ServerLifecycleNotifier& lifecycleNotifier() PURE;
+
+  /**
+   * @return the server regex engine.
+   */
+  virtual Regex::Engine& regexEngine() PURE;
 };
 
 /**
@@ -190,6 +206,12 @@ public:
    * @return OverloadManager& the overload manager for the server.
    */
   virtual OverloadManager& overloadManager() PURE;
+
+  /**
+   * @return NullOverloadManager& the dummy overload manager for the server for
+   * listeners that are bypassing a configured OverloadManager
+   */
+  virtual OverloadManager& nullOverloadManager() PURE;
 
   /**
    * @return whether external healthchecks are currently failed or not.

@@ -21,6 +21,7 @@ envoy_cc_test(
     srcs = ["api_listener_test.cc"],
     deps = [
         ":utility_lib",
+        "//source/common/formatter:formatter_extension_lib",
         "//source/common/listener_manager:listener_manager_lib",
         "//source/extensions/request_id/uuid:config",
         "//test/mocks/network:network_mocks",
@@ -52,6 +53,7 @@ envoy_cc_test(
     deps = [
         "//source/common/api:api_lib",
         "//source/common/event:dispatcher_lib",
+        "//source/common/formatter:formatter_extension_lib",
         "//source/common/http:context_lib",
         "//source/common/upstream:cluster_manager_lib",
         "//source/extensions/access_loggers/file:config",
@@ -273,6 +275,7 @@ envoy_cc_test(
         "//envoy/registry",
         "//source/common/stats:isolated_store_lib",
         "//source/extensions/resource_monitors/common:factory_base_lib",
+        "//source/server:null_overload_manager_lib",
         "//source/server:overload_manager_lib",
         "//test/mocks/event:event_mocks",
         "//test/mocks/protobuf:protobuf_mocks",
@@ -280,9 +283,19 @@ envoy_cc_test(
         "//test/mocks/thread_local:thread_local_mocks",
         "//test/test_common:registry_lib",
         "//test/test_common:simulated_time_system_lib",
-        "//test/test_common:test_runtime_lib",
         "//test/test_common:utility_lib",
         "@envoy_api//envoy/config/overload/v3:pkg_cc_proto",
+    ],
+)
+
+envoy_cc_test(
+    name = "null_overload_manager_test",
+    srcs = ["null_overload_manager_test.cc"],
+    deps = [
+        "//source/server:null_overload_manager_lib",
+        "//source/server:overload_manager_lib",
+        "//test/mocks/event:event_mocks",
+        "//test/mocks/thread_local:thread_local_mocks",
     ],
 )
 
@@ -360,18 +373,6 @@ envoy_cc_test(
         "//test/test_common:test_time_lib",
         "//test/test_common:utility_lib",
         "@envoy_api//envoy/config/core/v3:pkg_cc_proto",
-    ],
-)
-
-envoy_cc_test(
-    name = "ssl_context_manager_test",
-    srcs = ["ssl_context_manager_test.cc"],
-    deps = [
-        "//source/server:ssl_context_manager_lib",
-        "//test/mocks/ssl:ssl_mocks",
-        "//test/mocks/stats:stats_mocks",
-        "//test/test_common:simulated_time_system_lib",
-        "//test/test_common:utility_lib",
     ],
 )
 

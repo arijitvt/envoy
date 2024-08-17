@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Run a CI build/test target, e.g. docs, asan.
 
@@ -55,6 +55,8 @@ FETCH_PROTO_TARGETS=(
     @com_github_bufbuild_buf//:bin/buf
     //tools/proto_format/...)
 
+GCS_REDIRECT_PATH="${SYSTEM_PULLREQUEST_PULLREQUESTNUMBER:-${BUILD_SOURCEBRANCHNAME}}"
+
 retry () {
     local n wait iterations
     wait="${1}"
@@ -75,7 +77,6 @@ retry () {
     done
 }
 
-
 if [[ "${ENVOY_BUILD_ARCH}" == "x86_64" ]]; then
   BUILD_ARCH_DIR="/linux/amd64"
 elif [[ "${ENVOY_BUILD_ARCH}" == "aarch64" ]]; then
@@ -84,6 +85,23 @@ else
   # Fall back to use the ENVOY_BUILD_ARCH itself.
   BUILD_ARCH_DIR="/linux/${ENVOY_BUILD_ARCH}"
 fi
+
+setup_clang_toolchain() {
+    CONFIG_PARTS=()
+    if [[ -n "${ENVOY_RBE}" ]]; then
+        CONFIG_PARTS+=("remote")
+    fi
+    CONFIG_PARTS+=("clang")
+    ENVOY_STDLIB="${ENVOY_STDLIB:-libc++}"
+    if [[ "${ENVOY_STDLIB}" == "libc++" ]]; then
+        CONFIG_PARTS+=("libc++")
+    fi
+    CONFIG="$(IFS=- ; echo "${CONFIG_PARTS[*]}")"
+    BAZEL_BUILD_OPTIONS+=("--config=${CONFIG}")
+    BAZEL_BUILD_OPTION_LIST="${BAZEL_BUILD_OPTIONS[*]}"
+    export BAZEL_BUILD_OPTION_LIST
+    echo "clang toolchain with ${ENVOY_STDLIB} configured: ${CONFIG}"
+}
 
 function collect_build_profile() {
     local output_base
@@ -134,6 +152,8 @@ function cp_binary_for_image_build() {
   # Tools for the tools image. Strip to save size.
   strip bazel-bin/test/tools/schema_validator/schema_validator_tool \
     -o "${BASE_TARGET_DIR}"/"${TARGET_DIR}"/schema_validator_tool
+  strip bazel-bin/test/tools/router_check/router_check_tool \
+    -o "${BASE_TARGET_DIR}"/"${TARGET_DIR}"/router_check_tool
 
   # Copy the su-exec utility binary into the image
   cp -f bazel-bin/external/com_github_ncopa_suexec/su-exec "${BASE_TARGET_DIR}"/"${TARGET_DIR}"
@@ -199,6 +219,8 @@ function bazel_binary_build() {
   # Validation tools for the tools image.
   bazel build "${BAZEL_BUILD_OPTIONS[@]}" --remote_download_toplevel -c "${COMPILE_TYPE}" \
     //test/tools/schema_validator:schema_validator_tool "${CONFIG_ARGS[@]}"
+  bazel build "${BAZEL_BUILD_OPTIONS[@]}" --remote_download_toplevel -c "${COMPILE_TYPE}" \
+    //test/tools/router_check:router_check_tool "${CONFIG_ARGS[@]}"
 
   # Build su-exec utility
   bazel build "${BAZEL_BUILD_OPTIONS[@]}" --remote_download_toplevel -c "${COMPILE_TYPE}" external:su-exec
@@ -211,16 +233,6 @@ function bazel_envoy_binary_build() {
 
 function bazel_contrib_binary_build() {
   bazel_binary_build "$1" "${ENVOY_CONTRIB_BUILD_TARGET}" "${ENVOY_CONTRIB_BUILD_DEBUG_INFORMATION}" envoy-contrib
-}
-
-function run_ci_verify () {
-    export DOCKER_NO_PULL=1
-    export DOCKER_RMI_CLEANUP=1
-    # This is set to simulate an environment where users have shared home drives protected
-    # by a strong umask (ie only group readable by default).
-    umask 027
-    chmod -R o-rwx examples/
-    "${ENVOY_SRCDIR}/ci/verify_examples.sh" "${@}"
 }
 
 CI_TARGET=$1
@@ -238,7 +250,7 @@ if [[ $# -ge 1 ]]; then
 else
   # Coverage test will add QUICHE tests by itself.
   COVERAGE_TEST_TARGETS=("//test/...")
-  if [[ "${CI_TARGET}" == "release" ]]; then
+  if [[ "${CI_TARGET}" == "release" || "${CI_TARGET}" == "release.test_only" ]]; then
     # We test contrib on release only.
     COVERAGE_TEST_TARGETS=("${COVERAGE_TEST_TARGETS[@]}" "//contrib/...")
   elif [[ "${CI_TARGET}" == "msan" ]]; then
@@ -253,6 +265,7 @@ case $CI_TARGET in
         # which is built with libstdc++. Using libstdc++ for whole of the API CI job to avoid unnecessary rebuild.
         ENVOY_STDLIB="libstdc++"
         setup_clang_toolchain
+        export CLANG_TOOLCHAIN_SETUP=1
         export LLVM_CONFIG="${LLVM_ROOT}"/bin/llvm-config
         echo "Run protoxform test"
         bazel run "${BAZEL_BUILD_OPTIONS[@]}" \
@@ -278,7 +291,9 @@ case $CI_TARGET in
         ;&
 
     api.go)
-        setup_clang_toolchain
+        if [[ -z "$CLANG_TOOLCHAIN_SETUP" ]]; then
+            setup_clang_toolchain
+        fi
         GO_IMPORT_BASE="github.com/envoyproxy/go-control-plane"
         GO_TARGETS=(@envoy_api//...)
         read -r -a GO_PROTOS <<< "$(bazel query "${BAZEL_GLOBAL_OPTIONS[@]}" "kind('go_proto_library', ${GO_TARGETS[*]})" | tr '\n' ' ')"
@@ -307,13 +322,6 @@ case $CI_TARGET in
                 cp -a "$GO_FILE" "$OUTPUT_DIR"
                 if [[ "$GO_FILE" = *.validate.go ]]; then
                     sed -i '1s;^;//go:build !disable_pgv\n;' "$OUTPUT_DIR/$(basename "$GO_FILE")"
-                fi
-                # TODO(https://github.com/planetscale/vtprotobuf/pull/122) do this directly in the generator.
-                # Make vtprotobuf opt-in as it has some impact on binary sizes
-                if [[ "$GO_FILE" = *_vtproto.pb.go ]]; then
-                    if ! grep -q 'package ignore' "$GO_FILE"; then
-                        sed -i '1s;^;//go:build vtprotobuf\n// +build vtprotobuf\n;' "$OUTPUT_DIR/$(basename "$GO_FILE")"
-                    fi
                 fi
             done <<< "$(find "$INPUT_DIR" -name "*.go")"
         done
@@ -427,21 +435,12 @@ case $CI_TARGET in
             "${TEST_TARGETS[@]}" \
             --test_tag_filters=-nofips \
             --build_tests_only
-        echo "Building and testing with wasm=wavm: ${TEST_TARGETS[*]}"
-        bazel_with_collection \
-            test "${BAZEL_BUILD_OPTIONS[@]}" \
-            --config=compile-time-options \
-            --define wasm=wavm \
-            -c fastbuild \
-            "${TEST_TARGETS[@]}" \
-            --test_tag_filters=-nofips \
-            --build_tests_only
         # "--define log_debug_assert_in_release=enabled" must be tested with a release build, so run only
         # these tests under "-c opt" to save time in CI.
         bazel_with_collection \
             test "${BAZEL_BUILD_OPTIONS[@]}" \
             --config=compile-time-options \
-            --define wasm=wavm \
+            --define wasm=wasmtime \
             -c opt \
             @envoy//test/common/common:assert_test \
             @envoy//test/server:server_test
@@ -449,15 +448,15 @@ case $CI_TARGET in
         bazel_with_collection \
             test "${BAZEL_BUILD_OPTIONS[@]}" \
             --config=compile-time-options \
-            --define wasm=wavm \
+            --define wasm=wamtime \
             -c opt \
             @envoy//test/common/common:assert_test \
             --define log_fast_debug_assert_in_release=enabled \
             --define log_debug_assert_in_release=disabled
-        echo "Building binary with wasm=wavm... and logging disabled"
+        echo "Building binary with wasm=wasmtime... and logging disabled"
         bazel build "${BAZEL_BUILD_OPTIONS[@]}" \
             --config=compile-time-options \
-            --define wasm=wavm \
+            --define wasm=wasmtime \
             --define enable_logging=disabled \
             -c fastbuild \
             @envoy//source/exe:envoy-static \
@@ -484,7 +483,16 @@ case $CI_TARGET in
         else
             TARGET=coverage
         fi
-        "${ENVOY_SRCDIR}/ci/upload_gcs_artifact.sh" "/source/generated/${TARGET}" "$TARGET"
+        GCS_LOCATION=$(
+            bazel run //tools/gcs:upload \
+                  "${GCS_ARTIFACT_BUCKET}" \
+                  "${GCP_SERVICE_ACCOUNT_KEY_PATH}" \
+                  "/source/generated/${TARGET}" \
+                  "$TARGET" \
+                  "${GCS_REDIRECT_PATH}")
+        if [[ "${COVERAGE_FAILED}" -eq 1 ]]; then
+            echo "##vso[task.logissue type=error]Coverage failed, check artifact at: ${GCS_LOCATION}"
+        fi
         ;;
 
     debug)
@@ -645,7 +653,12 @@ case $CI_TARGET in
 
     docker-upload)
         setup_clang_toolchain
-        "${ENVOY_SRCDIR}/ci/upload_gcs_artifact.sh" "${BUILD_DIR}/build_images" docker
+        bazel run //tools/gcs:upload \
+              "${GCS_ARTIFACT_BUCKET}" \
+              "${GCP_SERVICE_ACCOUNT_KEY_PATH}" \
+              "${BUILD_DIR}/build_images" \
+              "docker" \
+              "${GCS_REDIRECT_PATH}"
         ;;
 
     dockerhub-publish)
@@ -687,7 +700,12 @@ case $CI_TARGET in
 
     docs-upload)
         setup_clang_toolchain
-        "${ENVOY_SRCDIR}/ci/upload_gcs_artifact.sh" /source/generated/docs docs
+        bazel run //tools/gcs:upload \
+              "${GCS_ARTIFACT_BUCKET}" \
+              "${GCP_SERVICE_ACCOUNT_KEY_PATH}" \
+              /source/generated/docs \
+              docs \
+              "${GCS_REDIRECT_PATH}"
         ;;
 
     fetch|fetch-*)
@@ -707,10 +725,14 @@ case $CI_TARGET in
             fetch-gcc)
                 targets=("${FETCH_GCC_TARGETS[@]}")
                 ;;
-            fetch-release)
+            fetch-release|fetch-release.test_only)
                 targets=(
                     "${FETCH_BUILD_TARGETS[@]}"
                     "${FETCH_ALL_TEST_TARGETS[@]}")
+                ;;
+            fetch-release.server_only)
+                targets=(
+                    "${FETCH_BUILD_TARGETS[@]}")
                 ;;
             fetch-*coverage)
                 targets=("${FETCH_TEST_TARGETS[@]}")
@@ -761,8 +783,16 @@ case $CI_TARGET in
         ;;
 
     gcc)
-        BAZEL_BUILD_OPTIONS+=("--test_env=HEAPCHECK=")
-        setup_gcc_toolchain
+        if [[ -n "${ENVOY_STDLIB}" && "${ENVOY_STDLIB}" != "libstdc++" ]]; then
+            echo "gcc toolchain doesn't support ${ENVOY_STDLIB}."
+            exit 1
+        fi
+        if [[ -n "${ENVOY_RBE}" ]]; then
+            CONFIG_PREFIX="remote-"
+        fi
+        CONFIG="${CONFIG_PREFIX}gcc"
+        BAZEL_BUILD_OPTIONS+=("--config=${CONFIG}")
+        echo "gcc toolchain configured: ${CONFIG}"
         echo "Testing ${TEST_TARGETS[*]}"
         bazel_with_collection \
             test "${BAZEL_BUILD_OPTIONS[@]}" \
@@ -779,7 +809,6 @@ case $CI_TARGET in
         ;;
 
     msan)
-        ENVOY_STDLIB=libc++
         setup_clang_toolchain
         # rbe-toolchain-msan must comes as first to win library link order.
         BAZEL_BUILD_OPTIONS=(
@@ -814,32 +843,26 @@ case $CI_TARGET in
                  "${PUBLISH_ARGS[@]}"
         ;;
 
-    release|release.server_only)
-        if [[ "$CI_TARGET" == "release" ]]; then
+    release|release.server_only|release.test_only)
+        if [[ "$CI_TARGET" == "release" || "$CI_TARGET" == "release.test_only" ]]; then
             # When testing memory consumption, we want to test against exact byte-counts
             # where possible. As these differ between platforms and compile options, we
             # define the 'release' builds as canonical and test them only in CI, so the
             # toolchain is kept consistent. This ifdef is checked in
             # test/common/stats/stat_test_utility.cc when computing
-            # Stats::TestUtil::MemoryTest::mode().
+            # Memory::TestUtil::MemoryTest::mode().
             if [[ "${ENVOY_BUILD_ARCH}" == "x86_64" ]]; then
                 BAZEL_BUILD_OPTIONS+=("--test_env=ENVOY_MEMORY_TEST_EXACT=true")
             fi
         fi
         setup_clang_toolchain
-        ENVOY_BINARY_DIR="${ENVOY_BUILD_DIR}/bin"
-        if [[ -e "${ENVOY_BINARY_DIR}" ]]; then
-            echo "Existing output directory found (${ENVOY_BINARY_DIR}), removing ..."
-            rm -rf "${ENVOY_BINARY_DIR}"
-        fi
-        mkdir -p "$ENVOY_BINARY_DIR"
         # As the binary build package enforces compiler options, adding here to ensure the tests and distribution build
         # reuse settings and any already compiled artefacts, the bundle itself will always be compiled
         # `--stripopt=--strip-all -c opt`
         BAZEL_RELEASE_OPTIONS=(
             --stripopt=--strip-all
             -c opt)
-        if [[ "$CI_TARGET" == "release" ]]; then
+        if [[ "$CI_TARGET" == "release" || "$CI_TARGET" == "release.test_only" ]]; then
             # Run release tests
             echo "Testing with:"
             echo "  targets: ${TEST_TARGETS[*]}"
@@ -851,6 +874,22 @@ case $CI_TARGET in
                 "${BAZEL_RELEASE_OPTIONS[@]}" \
                 "${TEST_TARGETS[@]}"
         fi
+
+        if [[ "$CI_TARGET" == "release.test_only" ]]; then
+            exit 0
+        fi
+
+        ENVOY_BINARY_DIR="${ENVOY_BUILD_DIR}/bin"
+        if [[ -e "${ENVOY_BINARY_DIR}" ]]; then
+            echo "Existing output directory found (${ENVOY_BINARY_DIR}), removing ..."
+            rm -rf "${ENVOY_BINARY_DIR}"
+        fi
+        mkdir -p "$ENVOY_BINARY_DIR"
+
+        # Build
+        echo "Building with:"
+        echo "  release options:  ${BAZEL_RELEASE_OPTIONS[*]}"
+
         # Build release binaries
         bazel build "${BAZEL_BUILD_OPTIONS[@]}" \
               "${BAZEL_RELEASE_OPTIONS[@]}" \
@@ -869,6 +908,12 @@ case $CI_TARGET in
         cp -a \
            bazel-bin/test/tools/schema_validator/schema_validator_tool.stripped \
            "${ENVOY_BINARY_DIR}/schema_validator_tool"
+        bazel build "${BAZEL_BUILD_OPTIONS[@]}" "${BAZEL_RELEASE_OPTIONS[@]}" \
+              --remote_download_toplevel \
+              //test/tools/router_check:router_check_tool.stripped
+        cp -a \
+           bazel-bin/test/tools/router_check/router_check_tool.stripped \
+           "${ENVOY_BINARY_DIR}/router_check_tool"
         echo "Release files created in ${ENVOY_BINARY_DIR}"
         ;;
 
@@ -883,7 +928,12 @@ case $CI_TARGET in
         setup_clang_toolchain
         bazel build "${BAZEL_BUILD_OPTIONS[@]}" //distribution:signed
         cp -a bazel-bin/distribution/release.signed.tar.zst "${BUILD_DIR}/envoy/"
-        "${ENVOY_SRCDIR}/ci/upload_gcs_artifact.sh" "${BUILD_DIR}/envoy" release
+        bazel run //tools/gcs:upload \
+              "${GCS_ARTIFACT_BUCKET}" \
+              "${GCP_SERVICE_ACCOUNT_KEY_PATH}" \
+              "${BUILD_DIR}/envoy" \
+              "release" \
+              "${GCS_REDIRECT_PATH}"
         ;;
 
     sizeopt)
@@ -940,7 +990,13 @@ case $CI_TARGET in
         ;;
 
     verify_examples)
-        run_ci_verify "*" "win32-front-proxy|shared"
+        DEV_CONTAINER_ID=$(docker inspect --format='{{.Id}}' envoyproxy/envoy:dev)
+        bazel run --config=ci \
+                  --action_env="DEV_CONTAINER_ID=${DEV_CONTAINER_ID}" \
+                  --host_action_env="DEV_CONTAINER_ID=${DEV_CONTAINER_ID}" \
+                  --sandbox_writable_path="${HOME}/.docker/" \
+                  --sandbox_writable_path="$HOME" \
+                  @envoy_examples//:verify_examples
         ;;
 
     verify.trigger)

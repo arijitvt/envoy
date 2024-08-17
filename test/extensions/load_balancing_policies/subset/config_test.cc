@@ -20,6 +20,7 @@ TEST(SubsetConfigTest, SubsetConfigTest) {
   NiceMock<Upstream::MockClusterInfo> cluster_info;
   NiceMock<Upstream::MockPrioritySet> main_thread_priority_set;
   NiceMock<Upstream::MockPrioritySet> thread_local_priority_set;
+  NiceMock<Upstream::MockLoadBalancerFactoryContext> lb_factory_context;
 
   envoy::config::core::v3::TypedExtensionConfig config;
   config.set_name("envoy.load_balancing_policies.subset");
@@ -50,14 +51,15 @@ TEST(SubsetConfigTest, SubsetConfigTest) {
   auto& factory = Config::Utility::getAndCheckFactory<Upstream::TypedLoadBalancerFactory>(config);
   EXPECT_EQ("envoy.load_balancing_policies.subset", factory.name());
 
-  auto lb_config = factory.loadConfig(*config_msg, context.messageValidationVisitor());
+  auto lb_config =
+      factory.loadConfig(lb_factory_context, *config_msg, context.messageValidationVisitor());
 
   auto thread_aware_lb =
       factory.create(*lb_config, cluster_info, main_thread_priority_set, context.runtime_loader_,
                      context.api_.random_, context.time_system_);
   EXPECT_NE(nullptr, thread_aware_lb);
 
-  thread_aware_lb->initialize();
+  ASSERT_TRUE(thread_aware_lb->initialize().ok());
 
   auto thread_local_lb_factory = thread_aware_lb->factory();
   EXPECT_NE(nullptr, thread_local_lb_factory);
@@ -71,6 +73,7 @@ TEST(SubsetConfigTest, SubsetConfigTestWithUnknownSubsetLoadBalancingPolicy) {
   NiceMock<Upstream::MockClusterInfo> cluster_info;
   NiceMock<Upstream::MockPrioritySet> main_thread_priority_set;
   NiceMock<Upstream::MockPrioritySet> thread_local_priority_set;
+  NiceMock<Upstream::MockLoadBalancerFactoryContext> lb_factory_context;
 
   envoy::config::core::v3::TypedExtensionConfig config;
   config.set_name("envoy.load_balancing_policies.subset");
@@ -100,7 +103,8 @@ TEST(SubsetConfigTest, SubsetConfigTestWithUnknownSubsetLoadBalancingPolicy) {
   EXPECT_EQ("envoy.load_balancing_policies.subset", factory.name());
 
   EXPECT_THROW_WITH_MESSAGE(
-      factory.loadConfig(*config_msg, context.messageValidationVisitor()), EnvoyException,
+      factory.loadConfig(lb_factory_context, *config_msg, context.messageValidationVisitor()),
+      EnvoyException,
       "cluster: didn't find a registered load balancer factory implementation for subset lb with "
       "names from [envoy.load_balancing_policies.unknown]");
 }

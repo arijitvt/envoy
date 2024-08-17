@@ -109,6 +109,7 @@ public:
   MOCK_METHOD(OptRef<const Tracing::Config>, tracingConfig, (), (const));
   MOCK_METHOD(const ScopeTrackedObject&, scope, ());
   MOCK_METHOD(void, restoreContextOnContinue, (ScopeTrackedObjectStack&));
+  MOCK_METHOD(bool, isHalfCloseEnabled, ());
 
   ResponseHeaderMapPtr informational_headers_;
   ResponseHeaderMapPtr response_headers_;
@@ -208,7 +209,7 @@ public:
   MOCK_METHOD(bool, createFilterChain, (FilterChainManager & manager), (const));
   MOCK_METHOD(bool, createUpgradeFilterChain,
               (absl::string_view upgrade_type, const FilterChainFactory::UpgradeMap* upgrade_map,
-               FilterChainManager& manager),
+               FilterChainManager& manager, const Http::FilterChainOptions&),
               (const));
 };
 
@@ -230,6 +231,14 @@ public:
   MOCK_METHOD(void, clearRouteCache, ());
 
   std::shared_ptr<Router::MockRoute> route_;
+};
+
+class MockSidestreamWatermarkCallbacks : public SidestreamWatermarkCallbacks {
+public:
+  ~MockSidestreamWatermarkCallbacks() override = default;
+
+  MOCK_METHOD(void, onSidestreamAboveHighWatermark, ());
+  MOCK_METHOD(void, onSidestreamBelowLowWatermark, ());
 };
 
 class MockStreamDecoderFilterCallbacks : public StreamDecoderFilterCallbacks,
@@ -320,6 +329,7 @@ public:
   MOCK_METHOD(void, setUpstreamOverrideHost, (Upstream::LoadBalancerContext::OverrideHost));
   MOCK_METHOD(absl::optional<Upstream::LoadBalancerContext::OverrideHost>, upstreamOverrideHost, (),
               (const));
+  MOCK_METHOD(bool, shouldLoadShed, (), (const));
 
   Buffer::InstancePtr buffer_;
   std::list<DownstreamWatermarkCallbacks*> callbacks_{};
@@ -330,6 +340,7 @@ public:
   bool is_grpc_request_{};
   bool is_head_request_{false};
   bool stream_destroyed_{};
+  NiceMock<Event::MockDispatcher> dispatcher_;
 };
 
 class MockStreamEncoderFilterCallbacks : public StreamEncoderFilterCallbacks,
@@ -562,7 +573,7 @@ public:
     destructor_callback_ = callback;
   }
   void removeDestructorCallback() override { destructor_callback_.reset(); }
-  MOCK_METHOD(void, setWatermarkCallbacks, (DecoderFilterWatermarkCallbacks & callback),
+  MOCK_METHOD(void, setWatermarkCallbacks, (Http::SidestreamWatermarkCallbacks & callback),
               (override));
   MOCK_METHOD(void, removeWatermarkCallbacks, (), (override));
   MOCK_METHOD(const StreamInfo::StreamInfo&, streamInfo, (), (const override));
@@ -596,6 +607,8 @@ public:
     ON_CALL(*this, preserveExternalRequestId()).WillByDefault(testing::Return(false));
     ON_CALL(*this, alwaysSetRequestIdInResponse()).WillByDefault(testing::Return(false));
     ON_CALL(*this, schemeToSet()).WillByDefault(testing::ReturnRef(scheme_));
+    ON_CALL(*this, shouldSchemeMatchUpstream())
+        .WillByDefault(testing::ReturnPointee(&scheme_match_upstream_));
     ON_CALL(*this, addProxyProtocolConnectionState()).WillByDefault(testing::Return(true));
   }
 
@@ -625,6 +638,7 @@ public:
   MOCK_METHOD(absl::optional<std::chrono::milliseconds>, idleTimeout, (), (const));
   MOCK_METHOD(bool, isRoutable, (), (const));
   MOCK_METHOD(absl::optional<std::chrono::milliseconds>, maxConnectionDuration, (), (const));
+  MOCK_METHOD(bool, http1SafeMaxConnectionDuration, (), (const));
   MOCK_METHOD(absl::optional<std::chrono::milliseconds>, maxStreamDuration, (), (const));
   MOCK_METHOD(std::chrono::milliseconds, streamIdleTimeout, (), (const));
   MOCK_METHOD(std::chrono::milliseconds, requestTimeout, (), (const));
@@ -637,6 +651,7 @@ public:
   MOCK_METHOD(HttpConnectionManagerProto::ServerHeaderTransformation, serverHeaderTransformation,
               (), (const));
   MOCK_METHOD(const absl::optional<std::string>&, schemeToSet, (), (const));
+  MOCK_METHOD(bool, shouldSchemeMatchUpstream, (), (const));
   MOCK_METHOD(ConnectionManagerStats&, stats, ());
   MOCK_METHOD(ConnectionManagerTracingStats&, tracingStats, ());
   MOCK_METHOD(bool, useRemoteAddress, (), (const));
@@ -677,6 +692,7 @@ public:
   MOCK_METHOD(uint64_t, maxRequestsPerConnection, (), (const));
   MOCK_METHOD(const HttpConnectionManagerProto::ProxyStatusConfig*, proxyStatusConfig, (), (const));
   MOCK_METHOD(ServerHeaderValidatorPtr, makeHeaderValidator, (Protocol protocol));
+  MOCK_METHOD(bool, appendLocalOverload, (), (const));
   MOCK_METHOD(bool, appendXForwardedPort, (), (const));
   MOCK_METHOD(bool, addProxyProtocolConnectionState, (), (const));
 
@@ -684,6 +700,7 @@ public:
       std::make_unique<DefaultInternalAddressConfig>();
   std::vector<Http::EarlyHeaderMutationPtr> early_header_mutation_extensions_;
   absl::optional<std::string> scheme_;
+  bool scheme_match_upstream_;
 };
 
 class MockReceivedSettings : public ReceivedSettings {

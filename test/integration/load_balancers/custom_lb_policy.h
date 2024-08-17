@@ -17,7 +17,7 @@ public:
   Upstream::LoadBalancerFactorySharedPtr factory() override {
     return std::make_shared<LbFactory>(host_);
   }
-  void initialize() override {}
+  absl::Status initialize() override { return absl::OkStatus(); }
 
 private:
   class LbImpl : public Upstream::LoadBalancer {
@@ -73,7 +73,8 @@ public:
     return std::make_unique<ThreadAwareLbImpl>();
   }
 
-  Upstream::LoadBalancerConfigPtr loadConfig(const Protobuf::Message&,
+  Upstream::LoadBalancerConfigPtr loadConfig(Upstream::LoadBalancerFactoryContext&,
+                                             const Protobuf::Message&,
                                              ProtobufMessage::ValidationVisitor&) override {
     return std::make_unique<EmptyLoadBalancerConfig>();
   }
